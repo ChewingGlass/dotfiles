@@ -1,0 +1,9 @@
+git
+curl
+build-essential
+jq
+fd-find
+ripgrep
+unzip
+gh
+python3

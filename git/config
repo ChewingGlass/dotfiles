@@ -1,0 +1,15 @@
+# Shared settings. Identity and commit signing go in ~/.gitconfig, which the repo does not track.
+[alias]
+	co = checkout
+[push]
+	autoSetupRemote = true
+[branch]
+	autoSetupMerge = simple
+[gpg]
+	format = ssh
+[credential "https://github.com"]
+	helper =
+	helper = !gh auth git-credential
+[credential "https://gist.github.com"]
+	helper =
+	helper = !gh auth git-credential

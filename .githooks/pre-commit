@@ -1,0 +1,8 @@
+#!/bin/sh
+# The repo is public. A commit that contains a secret does not go through.
+if ! command -v gitleaks >/dev/null 2>&1; then
+	echo "pre-commit: install gitleaks to commit to this repo" >&2
+	exit 1
+fi
+
+exec gitleaks git --pre-commit --staged --redact --no-banner

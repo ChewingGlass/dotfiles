@@ -1,0 +1,9 @@
+anthropic.claude-code
+dbaeumer.vscode-eslint
+esbenp.prettier-vscode
+monokai.theme-monokai-pro-vscode
+ms-vscode-remote.remote-ssh
+ms-vscode.vscode-typescript-next
+rust-lang.rust-analyzer
+statiolake.vscode-rustfmt
+trinm1709.dracula-theme-from-intellij

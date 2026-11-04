@@ -1,0 +1,19 @@
+onboarding = false
+[keys]
+# iTerm2 consumes every Cmd chord as an application shortcut, and no terminal
+# input encoding carries the Command modifier, so a `cmd+...` binding here is
+# well-formed but can never fire. Instead iTerm2 remaps each Cmd chord to the
+# F12 escape sequence plus an action letter (Settings -> Keys -> Key Bindings),
+# and herdr reads that as ordinary prefix input. F12 is the prefix because
+# nothing on the keyboard or in a pane's app sends it by accident, so it steals
+# no key from the shell or from an agent running in a pane.
+prefix = "f12"
+
+previous_tab = "prefix+p"
+next_tab = "prefix+n"
+switch_tab = "prefix+1..9"
+new_tab = "prefix+c"
+close_tab = "prefix+shift+x"
+
+[ui]
+agent_panel_sort = "spaces"

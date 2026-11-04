@@ -1,0 +1,11 @@
+#!/bin/sh
+# Runs herdr on the SSH host in HERDR_HOST or ~/.config/herdr/host.
+# The herdr server keeps running on that host when the connection drops.
+# Without a host, the local herdr runs.
+host="${HERDR_HOST:-$(cat "$HOME/.config/herdr/host" 2>/dev/null)}"
+
+if [ -n "$host" ]; then
+	exec ssh -t "$host" 'exec "$SHELL" -lc herdr'
+fi
+
+exec "$HOME/.local/bin/herdr" "$@"

@@ -1,0 +1,76 @@
+{
+  "window.autoDetectColorScheme": false,
+  "workbench.colorTheme": "Darcula Theme from IntelliJ",
+  "workbench.preferredDarkColorTheme": "Monokai Pro",
+  "workbench.tree.indent": 18,
+  "workbench.editorAssociations": {
+    "*.brief.md": "vscode.markdown.preview.editor"
+  },
+
+  "editor.fontFamily": "JetBrains Mono",
+  "editor.fontWeight": "300",
+  "editor.fontSize": 13,
+  "editor.letterSpacing": 1.2,
+  "editor.lineHeight": 22,
+  "editor.fontLigatures": true,
+  "editor.tabSize": 2,
+  "editor.detectIndentation": false,
+  "editor.inlineSuggest.enabled": true,
+  "editor.formatOnSave": true,
+  "editor.formatOnPaste": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit",
+    "source.addMissingImports": "never"
+  },
+
+  "files.autoSave": "off",
+  "scm.autoReveal": false,
+  "explorer.autoReveal": false,
+  "diffEditor.ignoreTrimWhitespace": true,
+  "diffEditor.renderSideBySide": false,
+
+  "git.autofetch": true,
+  "git.confirmSync": false,
+  "git.replaceTagsWhenPull": true,
+  "git.blame.statusBarItem.enabled": true,
+  "git.blame.editorDecoration.enabled": true,
+
+  "terminal.integrated.defaultProfile.osx": "fish",
+  "terminal.integrated.defaultProfile.linux": "fish",
+
+  "remote.SSH.defaultExtensions": [
+    "anthropic.claude-code",
+    "rust-lang.rust-analyzer",
+    "statiolake.vscode-rustfmt",
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "ms-vscode.vscode-typescript-next"
+  ],
+
+  "[rust]": {
+    "editor.defaultFormatter": "rust-lang.rust-analyzer",
+    "editor.formatOnSave": true,
+    "editor.tabSize": 4
+  },
+  "rust-analyzer.check.command": "clippy",
+  "rust-analyzer.imports.granularity.group": "crate",
+  "rust-analyzer.rustfmt.extraArgs": [
+    "+nightly",
+    "--config",
+    "group_imports=StdExternalCrate,imports_granularity=Crate"
+  ],
+
+  "typescript.updateImportsOnFileMove.enabled": "always",
+  "javascript.updateImportsOnFileMove.enabled": "always",
+  "typescript.tsserver.maxTsServerMemory": 8192,
+  "prettier.singleQuote": false,
+  "eslint.format.enable": true,
+  "eslint.validate": ["javascript", "javascriptreact", "typescript", "typescriptreact", "vue"],
+  "[javascript]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+  "[javascriptreact]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+  "[typescript]": { "editor.defaultFormatter": "dbaeumer.vscode-eslint" },
+  "[typescriptreact]": { "editor.defaultFormatter": "dbaeumer.vscode-eslint" },
+
+  "redhat.telemetry.enabled": false
+}

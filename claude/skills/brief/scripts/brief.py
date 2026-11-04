@@ -1,0 +1,347 @@
+#!/usr/bin/env python3
+"""Index the hunks of a diff, and resolve a plan that orders them into a brief.
+
+  brief.py snapshot                                                    > <sha>
+  brief.py hunks --base <sha> [--head <rev>] [-U <n>]                 > hunks.json
+  brief.py model --base <sha> [--head <rev>] [-U <n>] --plan plan.json
+                 [--round <n> --snapshot <sha> --since <sha>]       > <name>.brief.json
+
+`snapshot` commits the working tree, untracked files included, without touching the index.
+`hunks` and `model` diff <base> against <head>. <head> defaults to the working tree. Hunk ids are stable
+for one diff, so both commands must use the same arguments. Every hunk the plan does not place goes
+to the rest of the diff, so the brief always holds the whole change.
+
+An added file that holds code from a deleted file is diffed against that code, not against nothing,
+and the deleted file against the part no added file took. See `moves.py`.
+"""
+
+import argparse
+import datetime
+import fnmatch
+import json
+import os
+import re
+import subprocess
+import sys
+from dataclasses import dataclass, asdict
+
+from moves import find_moves
+
+# Git names the enclosing function only for paths inside the repo, so a diff of the built move files
+# finds it with this pattern instead.
+DEFINITION = re.compile(r"^\s*(pub(\([^)]*\))?\s+|export\s+|async\s+|unsafe\s+|default\s+)*"
+                        r"(fn|impl|struct|enum|trait|mod|function|class|interface|def)\b")
+HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$")
+
+
+@dataclass
+class Hunk:
+    id: str
+    file: str
+    old_start: int
+    new_start: int
+    new_len: int
+    first_changed_line: int
+    added: int
+    deleted: int
+    enclosing: str
+    text: str
+    origin: str = ""
+
+
+def git_diff(base, head, context):
+    cmd = ["git", "diff", f"-U{context}", "--no-color", "--no-ext-diff", "--no-renames", base]
+    if head:
+        cmd.append(head)
+    return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+
+
+def file_diff(old_path, new_path, context):
+    cmd = ["git", "diff", "--no-index", f"-U{context}", "--no-color", "--no-ext-diff", old_path, new_path]
+    return subprocess.run(cmd, capture_output=True, text=True).stdout
+
+
+def moves_dir(head):
+    git_dir = subprocess.run(["git", "rev-parse", "--absolute-git-dir"], capture_output=True, text=True, check=True).stdout.strip()
+    return os.path.join(git_dir, "brief-moves", head or "worktree")
+
+
+def index_hunks(base, head, context, root):
+    """Every hunk of the diff, with moved code diffed against where it came from."""
+    statuses = file_statuses(base, head)
+    targets, sources = find_moves(base, head, statuses, root, moves_dir(head))
+    by_file = {}
+    for hunk in parse_hunks(git_diff(base, head, context)):
+        by_file.setdefault(hunk.file, []).append(hunk)
+
+    hunks = []
+    for file in statuses:
+        if file in targets:
+            move = targets[file]
+            moved = parse_hunks(file_diff(move.base_path, move.head_path, context), file)
+            with open(move.head_path, encoding="utf-8") as head_file:
+                head_lines = head_file.read().splitlines()
+            for hunk in moved:
+                hunk.origin = move.origin(hunk.old_start + (1 if hunk.old_start == 0 else 0))
+                hunk.enclosing = enclosing_definition(head_lines, hunk.new_start)
+            hunks.extend(moved)
+        elif file in sources:
+            hunks.extend(parse_hunks(file_diff(sources[file].base_path, sources[file].kept_path, context), file))
+        else:
+            hunks.extend(by_file.get(file, []))
+
+    for index, hunk in enumerate(hunks):
+        hunk.id = f"h{index + 1}"
+
+    return hunks, targets, sources
+
+
+def enclosing_definition(lines, start):
+    for line in reversed(lines[:max(start - 1, 0)]):
+        if DEFINITION.match(line):
+            return line.strip()
+
+    return ""
+
+
+def moves_entry(targets, sources, hunks):
+    entry = {}
+    for file, move in targets.items():
+        own = [h for h in hunks if h.file == file]
+        origins = {}
+        for segment in move.segments:
+            origins[segment.source] = origins.get(segment.source, 0) + segment.matched
+        entry[file] = {"role": "target", "original": move.base_path, "modified": None,
+                       "from": [{"file": f, "lines": n} for f, n in origins.items()],
+                       "moved": sum(s.matched for s in move.segments),
+                       "added": sum(h.added for h in own), "deleted": sum(h.deleted for h in own)}
+
+    for file, move in sources.items():
+        own = [h for h in hunks if h.file == file]
+        entry[file] = {"role": "source", "original": move.base_path, "modified": move.kept_path,
+                       "to": [{"file": f, "lines": n} for f, n in move.targets.items()],
+                       "moved": move.kept_lines, "added": 0, "deleted": sum(h.deleted for h in own)}
+
+    return entry
+
+
+def parse_hunks(diff, only_file=None):
+    hunks = []
+    file = only_file
+    current = None
+
+    def close():
+        if current:
+            hunks.append(finish(current))
+
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            close()
+            current = None
+            file = only_file or line.split(" b/", 1)[1]
+            continue
+
+        if line.startswith("+++ "):
+            if line != "+++ /dev/null" and not only_file:
+                file = line[6:] if line.startswith("+++ b/") else line[4:]
+            continue
+
+        match = HUNK_HEADER.match(line)
+        if match:
+            close()
+            current = {
+                "file": file,
+                "old_start": int(match.group(1)),
+                "new_start": int(match.group(3)),
+                "new_len": int(match.group(4) or 1),
+                "enclosing": match.group(5).strip(),
+                "lines": [line],
+            }
+            continue
+
+        if current and line[:1] in (" ", "+", "-", "\\"):
+            current["lines"].append(line)
+
+    close()
+
+    for index, hunk in enumerate(hunks):
+        hunk.id = f"h{index + 1}"
+
+    return hunks
+
+
+def finish(raw):
+    new_line = raw["new_start"]
+    first_changed = None
+    added = deleted = 0
+
+    for line in raw["lines"][1:]:
+        if line.startswith("+"):
+            added += 1
+            first_changed = first_changed or new_line
+            new_line += 1
+        elif line.startswith("-"):
+            deleted += 1
+            first_changed = first_changed or max(new_line, 1)
+        elif line.startswith(" "):
+            new_line += 1
+
+    return Hunk(
+        id="",
+        file=raw["file"],
+        old_start=raw["old_start"],
+        new_start=raw["new_start"],
+        new_len=raw["new_len"],
+        first_changed_line=first_changed or raw["new_start"],
+        added=added,
+        deleted=deleted,
+        enclosing=raw["enclosing"],
+        text="\n".join(raw["lines"]),
+    )
+
+
+class Placer:
+    """Hands out hunks to plan steps, and refuses a hunk that is unknown or placed twice."""
+
+    def __init__(self, hunks):
+        self.by_id = {hunk.id: hunk for hunk in hunks}
+        self.placed = {}
+
+    def take(self, ids, owner):
+        taken = []
+        for hunk_id in ids:
+            if hunk_id not in self.by_id:
+                sys.exit(f"plan names unknown hunk {hunk_id}")
+
+            if hunk_id in self.placed:
+                sys.exit(f"hunk {hunk_id} is placed twice: {self.placed[hunk_id]} and {owner}")
+
+            self.placed[hunk_id] = owner
+            taken.append(self.by_id[hunk_id])
+
+        return taken
+
+
+def file_statuses(base, head):
+    cmd = ["git", "diff", "--name-status", "--no-renames", base] + ([head] if head else [])
+    lines = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout.splitlines()
+    return {line.split("\t", 1)[1]: line[0] for line in lines if "\t" in line}
+
+
+def hunk_entry(hunk):
+    old_len = int(HUNK_HEADER.match(hunk.text.split("\n", 1)[0]).group(2) or 1)
+    return {"id": hunk.id, "file": hunk.file, "line": hunk.first_changed_line,
+            "new_start": hunk.new_start, "new_len": hunk.new_len,
+            "old_start": hunk.old_start, "old_len": old_len,
+            "added": hunk.added, "deleted": hunk.deleted, "enclosing": hunk.enclosing, "origin": hunk.origin}
+
+
+def build_model(hunks, plan, ctx):
+    """The plan resolved against the hunks, for the VS Code extension to show."""
+    placer = Placer(hunks)
+    paths = []
+    for section in plan.get("paths", []):
+        steps = []
+        for step in section["steps"]:
+            entry = {"fn": step["fn"], "via": step.get("via"), "note": step.get("note"),
+                     "same_as": step.get("same_as"), "caller": step.get("caller")}
+            taken = [] if step.get("same_as") else placer.take(step.get("hunks", []), step["fn"])
+            if taken:
+                entry["hunks"] = [hunk_entry(h) for h in sorted(taken, key=lambda h: (h.file, h.new_start))]
+            elif not step.get("same_as"):
+                entry["file"], entry["line"] = step["file"], step["line"]
+
+            steps.append(entry)
+
+        paths.append({"heading": section["heading"], "steps": steps})
+
+    remaining = [hunk for hunk in hunks if hunk.id not in placer.placed]
+    files = list(dict.fromkeys(hunk.file for hunk in remaining))
+    order = plan.get("rest_order", [])
+    files.sort(key=lambda f: next((i for i, glob in enumerate(order) if fnmatch.fnmatch(f, glob)), len(order)))
+    fold, omit = plan.get("fold", []), plan.get("omit", [])
+
+    def kind(file):
+        if any(fnmatch.fnmatch(file, g) for g in omit):
+            return "omitted"
+
+        return "folded" if any(fnmatch.fnmatch(file, g) for g in fold) else "shown"
+
+    rank = {"shown": 0, "folded": 1, "omitted": 2}
+    files.sort(key=lambda f: rank[kind(f)])
+    rest = [{"file": f, "kind": kind(f), "hunks": [hunk_entry(h) for h in remaining if h.file == f]} for f in files]
+
+    return {
+        "title": plan["title"], "url": plan["url"], "brief": plan["brief"],
+        "root": ctx["root"], "base": ctx["base"], "head": ctx.get("head"),
+        "generated": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "round": ctx["round"], "snapshot": ctx["snapshot"],
+        "since": {"base": ctx["since"], "statuses": file_statuses(ctx["since"], ctx["head"])} if ctx["since"] else None,
+        "added": sum(h.added for h in hunks), "deleted": sum(h.deleted for h in hunks),
+        "statuses": ctx["statuses"], "moves": ctx["moves"], "paths": paths, "rest": rest,
+    }
+
+
+def snapshot():
+    """A commit of the whole working tree, untracked files included, with HEAD as its parent.
+
+    It goes through a copy of the index, so the real index and the files stay as they are.
+    """
+    import os
+    import shutil
+    import tempfile
+
+    index = subprocess.run(["git", "rev-parse", "--git-path", "index"], capture_output=True, text=True, check=True).stdout.strip()
+    with tempfile.TemporaryDirectory() as scratch:
+        temp_index = os.path.join(scratch, "index")
+        if os.path.exists(index):
+            shutil.copyfile(index, temp_index)
+
+        env = dict(os.environ, GIT_INDEX_FILE=temp_index)
+        subprocess.run(["git", "add", "-A"], env=env, check=True, capture_output=True)
+        tree = subprocess.run(["git", "write-tree"], env=env, capture_output=True, text=True, check=True).stdout.strip()
+
+    head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    commit = subprocess.run(["git", "commit-tree", tree, "-p", head, "-m", "brief snapshot"],
+                            capture_output=True, text=True, check=True).stdout.strip()
+    return commit
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("command", choices=["hunks", "model", "snapshot"])
+    parser.add_argument("--base")
+    parser.add_argument("--head")
+    parser.add_argument("-U", dest="context", type=int, default=3)
+    parser.add_argument("--plan")
+    parser.add_argument("--round", type=int, default=1)
+    parser.add_argument("--snapshot", help="the commit that holds the state this round reviews")
+    parser.add_argument("--since", help="the snapshot of the last round, for the changes since then")
+    args = parser.parse_args()
+
+    if args.command == "snapshot":
+        print(snapshot())
+        return
+
+    if not args.base:
+        parser.error("--base is required")
+
+    root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True).stdout.strip()
+    hunks, targets, sources = index_hunks(args.base, args.head, args.context, root)
+
+    if args.command == "hunks":
+        index = [{k: v for k, v in asdict(h).items() if k != "text"} for h in hunks]
+        json.dump(index, sys.stdout, indent=1)
+        return
+
+    with open(args.plan) as plan_file:
+        plan = json.load(plan_file)
+
+    ctx = {"root": root, "base": args.base, "head": args.head, "statuses": file_statuses(args.base, args.head),
+           "moves": moves_entry(targets, sources, hunks),
+           "round": args.round, "snapshot": args.snapshot or args.head, "since": args.since}
+    json.dump(build_model(hunks, plan, ctx), sys.stdout, indent=1)
+
+
+if __name__ == "__main__":
+    main()
