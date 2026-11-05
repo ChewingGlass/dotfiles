@@ -200,8 +200,14 @@ install_iterm() {
 	local dir="$HOME/Library/Application Support/iTerm2/DynamicProfiles"
 	mkdir -p "$dir"
 
-	sed "s#__HOME__#$HOME#g" "$DOTFILES/iterm2/main.json" > "$dir/main.json"
-	sed "s#__HOME__#$HOME#g" "$DOTFILES/iterm2/herdr.json" > "$dir/herdr.json"
+	# iTerm2 loads dynamic profile files in name order, so a parent in another file can be missing.
+	# The herdr profile is built as Main with its own keys on top, so it needs no parent.
+	rm -f "$dir/main.json" "$dir/herdr.json"
+	jq -s '.[0].Profiles[0] as $main | .[1].Profiles[0] as $herdr
+		| ($main["Keyboard Map"] + $herdr["Keyboard Map"]) as $keys
+		| {Profiles: [$main, ($main + $herdr + {"Keyboard Map": $keys})]}' \
+		"$DOTFILES/iterm2/main.json" "$DOTFILES/iterm2/herdr.json" |
+		sed "s#__HOME__#$HOME#g" > "$dir/dotfiles.json"
 
 	# iTerm2 writes its preferences when it quits, so this setting holds only while iTerm2 is closed.
 	defaults write com.googlecode.iterm2 "Default Bookmark Guid" -string dotfiles-main-profile

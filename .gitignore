@@ -2,3 +2,4 @@
 __pycache__/
 node_modules/
 *.bak-dotfiles.*
+claude/skills/brief/scripts/package-lock.json
