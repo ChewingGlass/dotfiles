@@ -85,7 +85,7 @@ function fish_prompt
         end
     end
 
-    set -l host
+    set -l host ''
     if set -q SSH_CONNECTION
         set host $yellow(prompt_hostname)$normal' '
     end
